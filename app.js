@@ -38,6 +38,8 @@ let session = null, isPlatformAdmin = false, roles = {}, clients = [], clientId 
 let settings = blankSettings(), members = [], runs = [];
 let loaded = [], jdates = {}, jrefs = {}, stmtPeriod = {}, notes = [], loginMsg = '', busy = '', newClientOpen = false;
 let tab = 'run', saveState = '', primeDirty = false;
+const openDet = new Set();
+const dAttr = k => ` data-det="${esc(k)}"${openDet.has(k) ? ' open' : ''}`;
 function blankSettings() { return { prime: [], accounts: {}, expenseAccount: '', refPrefix: 'INTJNL', fyeMonth: 2 }; }
 const today = new Date(); const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 const monthEnds = (() => { const out = []; let [y, m] = [today.getFullYear(), today.getMonth() + 1]; for (let i = 0; i < 16; i++) { const e = E.eom(`${y}-${String(m).padStart(2, '0')}-01`); if (e <= todayIso) out.push(e); m--; if (m === 0) { m = 12; y--; } } return out; })();
@@ -207,14 +209,14 @@ function vAccountCard(p) {
     h += `<table style="margin-top:6px"><tr><th>Month</th><th>Period</th><th class="n">Days</th><th>Rate</th><th class="n">Interest</th></tr>`;
     plan.months.forEach(m => {
       h += `<tr><td>${E.MONLONG[+m.month.slice(5) - 1]} ${m.month.slice(0, 4)}</td><td>${E.dm(m.from)} – ${E.dmy(m.to)}</td><td class="n">${m.days}</td><td>${esc(E.rateText(m.segs).replace('@ ', ''))}</td><td class="n"><b>${fmt(m.amount)}</b></td></tr>
-      <tr><td colspan="5" style="padding-top:0;border:0"><details><summary>Working</summary><table class="sm"><tr><th>From</th><th>To</th><th class="n">Days</th><th class="n">Balance</th><th class="n">Rate</th><th class="n">Interest</th></tr>
+      <tr><td colspan="5" style="padding-top:0;border:0"><details${dAttr('w:' + l.id + ':' + m.month)}><summary>Working</summary><table class="sm"><tr><th>From</th><th>To</th><th class="n">Days</th><th class="n">Balance</th><th class="n">Rate</th><th class="n">Interest</th></tr>
       ${m.segs.map(s => `<tr><td>${E.dmy(s.from)}</td><td>${E.dmy(s.to)}</td><td class="n">${s.days}</td><td class="n">${fmt(s.bal)}</td><td class="n">${E.pct(s.rate)}</td><td class="n">${s.interest.toFixed(2)}</td></tr>`).join('')}</table></details></td></tr>`;
     });
     h += `<tr class="tot"><td colspan="4">Total to journal</td><td class="n">${fmt(E.round2(plan.months.reduce((s, m) => s + m.amount, 0)))}</td></tr></table>`;
   }
   if (check.length) {
     const flagged = check.filter(c => Math.abs(c.diff) >= 1);
-    h += `<details><summary>Posted in Sage vs calculated — last ${check.length} months${flagged.length ? ` (${flagged.length} differ by R1 or more)` : ' (all within R1)'}</summary>
+    h += `<details${dAttr('c:' + l.id)}><summary>Posted in Sage vs calculated — last ${check.length} months${flagged.length ? ` (${flagged.length} differ by R1 or more)` : ' (all within R1)'}</summary>
     <div class="muted" style="margin:6px 0">Differences usually come from entries added to the ledger after the interest was posted, or from day-count / rate-date slips in a spreadsheet. Tick a month to include its difference as an adjustment line in the journal.</div>
     <table class="sm"><tr><th>Month</th><th class="n">Posted</th><th class="n">Calculated</th><th class="n">Difference</th><th>Adjust</th></tr>${check.map(c => `<tr><td>${E.MONLONG[+c.month.slice(5) - 1].slice(0, 3)} ${c.month.slice(0, 4)}</td><td class="n">${fmt(c.posted)}</td><td class="n">${fmt(c.calc)}</td><td class="n" style="${Math.abs(c.diff) >= 1 ? 'color:var(--maroon);font-weight:600' : ''}">${fmt(c.diff)}</td>
       <td>${Math.abs(c.diff) >= 0.005 ? `<input type="checkbox" data-a="adj" data-id="${esc(l.id)}" data-m="${c.month}" ${l.adj[c.month] ? 'checked' : ''}>` : ''}</td></tr>`).join('')}</table></details>`;
@@ -336,6 +338,7 @@ document.addEventListener('change', async e => {
   else return;
   render();
 });
+document.addEventListener('toggle', e => { const d = e.target; if (d && d.dataset && d.dataset.det) { if (d.open) openDet.add(d.dataset.det); else openDet.delete(d.dataset.det); } }, true);
 ['dragover', 'dragenter'].forEach(ev => document.addEventListener(ev, e => { const d = e.target.closest && e.target.closest('#drop'); if (d) { e.preventDefault(); d.classList.add('over'); } }));
 ['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => { const d = e.target.closest && e.target.closest('#drop'); if (d) { e.preventDefault(); d.classList.remove('over'); if (ev === 'drop') loadFiles(Array.from(e.dataTransfer.files)); } }));
 
