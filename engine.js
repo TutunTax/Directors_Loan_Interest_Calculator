@@ -69,10 +69,13 @@ const Engine = (() => {
 
   // ---------- interest-line detection & ledger checks ----------
   const INT_DESC = /\bint[er]{1,4}st\b/i, INT_REF = /^i?int/i;
+  // An "Interest adjustment May 2026 ..." line settles the interest of the month it names, not the month it was posted in.
+  const adjMonthOf = r => { const m = /interest adjustment\s+([a-z]{3})[a-z]*\s+(\d{4})/i.exec(r.desc || ''); if (!m) return null; const i = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec'].indexOf(m[1].toLowerCase()); return i < 0 ? null : m[2] + '-' + String(i + 1).padStart(2, '0'); };
+  const effMonth = r => r.adjMonth || r.date.slice(0, 7);
   const isInterestRow = r => /journal/i.test(r.type) && (INT_REF.test(r.ref) || INT_DESC.test(r.desc));
   function prepareAccount(a) {
     let run = a.opening, mismatches = 0, firstBad = null;
-    a.rows.forEach((r, i) => { r.idx = i; r.net = round2(r.credit - r.debit); r.isInterest = isInterestRow(r); run = round2(run + r.net); if (r.hasBal && Math.abs(run - r.bal) > 0.011) { mismatches++; if (!firstBad) firstBad = r; } });
+    a.rows.forEach((r, i) => { r.idx = i; r.net = round2(r.credit - r.debit); r.isInterest = isInterestRow(r); r.adjMonth = r.isInterest ? adjMonthOf(r) : null; run = round2(run + r.net); if (r.hasBal && Math.abs(run - r.bal) > 0.011) { mismatches++; if (!firstBad) firstBad = r; } });
     a.balanceMismatches = mismatches; a.firstMismatch = firstBad;
     a.closing = run;
     return a;
@@ -126,8 +129,9 @@ const Engine = (() => {
   function detectAccrued(acct) {
     const ints = acct.rows.filter(r => r.isInterest);
     if (!ints.length) return null;
-    const last = ints.reduce((m, r) => r.date >= m.date ? r : m, ints[0]);
-    return { date: eom(last.date), row: last };
+    const better = (r, m) => effMonth(r) > effMonth(m) || (effMonth(r) === effMonth(m) && ((!r.adjMonth && m.adjMonth) || (!!r.adjMonth === !!m.adjMonth && r.date >= m.date)));
+    const last = ints.reduce((m, r) => better(r, m) ? r : m, ints[0]);
+    return { date: eom(effMonth(last) + '-01'), row: last };
   }
 
   // Build the run for one account: months not yet posted up to asAt.
@@ -162,8 +166,8 @@ const Engine = (() => {
     for (let mo = first; mo <= lastM; mo = (() => { const [y, m] = mo.split('-').map(Number); return new Date(Date.UTC(y, m, 1)).toISOString().slice(0, 7); })()) {
       const from = mo + '-01', to = eom(from); if (to > throughDate) break;
       if (acct.rows.length && to < acct.rows[0].date) continue;
-      const posted = round2(acct.rows.filter(r => r.isInterest && ym(r.date) === mo).reduce((s, r) => s + r.net, 0));
-      const c = computePeriod(acct, cfg, prime, from, to, null, r => r.isInterest && ym(r.date) === mo);
+      const posted = round2(acct.rows.filter(r => r.isInterest && effMonth(r) === mo).reduce((s, r) => s + r.net, 0));
+      const c = computePeriod(acct, cfg, prime, from, to, null, r => r.isInterest && effMonth(r) === mo);
       out.push({ month: mo, from, to, posted, calc: c.total, diff: round2(c.total - posted), warns: c.warns });
     }
     return out;
