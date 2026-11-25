@@ -254,9 +254,9 @@ function vJournal(ctx) {
   let h = `<div class="card"><h2>Interest journal — ${esc(client.name)}</h2>`;
   if (!loaded.length) return h + `<div class="note info">Import the ledgers first.</div></div>` + vRuns();
   const d = canEdit() ? '' : ' disabled';
-  h += `<div class="row"><div>Sage ledger account for interest expense (debit) <input class="w-m" data-a="expacct" value="${esc(settings.expenseAccount)}" placeholder="account number / name"${d}></div></div>`;
+  h += `<div class="row"><div>Sage account name for interest expense (debit) <input class="w-m" data-a="expacct" value="${esc(settings.expenseAccount)}" placeholder="account number / name"${d}></div></div>`;
   const missing = ctx.plans.filter(p => !p.cfg.loanAccount && js.some(j => j.lines.some(x => x.p === p)));
-  if (missing.length) h += `<div class="row" style="margin-top:8px">${missing.map(p => `<div>${esc(p.cfg.label || p.l.acct.name)} — Sage ledger account (credit) <input class="w-m" data-a="loanacct" data-k="${esc(p.l.cfgKey)}" placeholder="account number / name"${d}></div>`).join('')}</div>`;
+  if (missing.length) h += `<div class="row" style="margin-top:8px">${missing.map(p => `<div>${esc(p.cfg.label || p.l.acct.name)} — Sage account name of the loan (credit) <input class="w-m" data-a="loanacct" data-k="${esc(p.l.cfgKey)}" placeholder="account number / name"${d}></div>`).join('')}</div>`;
   if (!js.length) return h + `<div class="note info" style="margin-top:12px">Nothing to journal — every loaded account is up to date to ${E.dmy(asAt)}.</div></div>` + vRuns();
   js.forEach(j => {
     h += `<div style="margin-top:16px"><div class="row"><h3>${esc(j.desc)}</h3><span class="muted">Reference</span><input class="w-m" data-a="jref" data-m="${j.month}" value="${esc(j.ref)}"><span class="muted">Date</span><input type="date" data-a="jdate" data-m="${j.month}" value="${j.date}"></div>
@@ -268,7 +268,7 @@ function vJournal(ctx) {
     h += `<tr class="tot"><td colspan="2">Total</td><td class="n">${t}</td><td class="n">${t}</td></tr></table></div>`;
   });
   h += `<div class="row" style="margin-top:16px"><button class="btn" data-a="dl-journal">Download Sage journal CSV</button><button class="btn sec" data-a="copy-journal">Copy journal lines</button><span class="muted" id="jmsg"></span></div>
-  <div class="muted" style="margin-top:8px">The CSV follows Sage Accounting's journal import layout (Adjustments → Journals → New Journal → Import Journals). Compare the headings to Sage's own template the first time; the ledger accounts must already exist. After posting, export the ledger again next month. Downloading records the journal in the history below.</div>
+  <div class="muted" style="margin-top:8px">The CSV uses Sage's Journal Entries import layout (one line per journal line: Account is debited or credited against the Affecting Account). The account names must match Sage exactly. After posting, export the ledger again next month. Downloading records the journal in the history below.</div>
   <textarea id="jcopy" class="hidden" readonly></textarea></div>`;
   return h + vRuns();
 }
@@ -305,7 +305,7 @@ function vSet() {
   <div>Journal reference prefix <input class="w-s" data-a="refprefix" value="${esc(settings.refPrefix)}"${d}></div>
   <div>Financial year ends in <select data-a="fye"${d}>${E.MONLONG.map((m, i) => `<option value="${i + 1}"${settings.fyeMonth === i + 1 ? ' selected' : ''}>${m}</option>`).join('')}</select></div></div></div>`;
   Object.keys(settings.accounts).sort().forEach(k => { const c = settings.accounts[k];
-    h += `<div class="card"><h3>${esc(c.label || k)} <span class="muted">· ${esc(c.sageName || k)}</span></h3><div class="row" style="margin:8px 0"><div>Short name <input class="w-m" data-a="cfg" data-k="${esc(k)}" data-f="label" value="${esc(c.label)}"${d}></div><div class="grow">Journal description <input class="w-l" data-a="cfg" data-k="${esc(k)}" data-f="descPrefix" value="${esc(c.descPrefix)}"${d}></div><div>Sage ledger account (credit) <input class="w-m" data-a="cfg" data-k="${esc(k)}" data-f="loanAccount" value="${esc(c.loanAccount)}"${d}></div></div>
+    h += `<div class="card"><h3>${esc(c.label || k)} <span class="muted">· ${esc(c.sageName || k)}</span></h3><div class="row" style="margin:8px 0"><div>Short name <input class="w-m" data-a="cfg" data-k="${esc(k)}" data-f="label" value="${esc(c.label)}"${d}></div><div class="grow">Journal description <input class="w-l" data-a="cfg" data-k="${esc(k)}" data-f="descPrefix" value="${esc(c.descPrefix)}"${d}></div><div>Sage account name of the loan (credit) <input class="w-m" data-a="cfg" data-k="${esc(k)}" data-f="loanAccount" value="${esc(c.loanAccount)}"${d}></div></div>
     <div class="muted">Interest rate for this loan</div>${rateEditor(k)}</div>`; });
   if (!Object.keys(settings.accounts).length) h += `<div class="note info">Loan accounts appear here automatically the first time you load a ledger for them.</div>`;
   h += `<div class="card"><h2>Prime lending rate <span class="muted">(shared by all clients${isPlatformAdmin ? '' : ' — read only'})</span></h2><div class="muted" style="margin-bottom:8px">Enter the first day the new prime rate applies (banks apply a change the day after the SARB announcement). Each loan's rate is prime plus its own margin, so a prime change is entered once and flows to every loan of every client.</div>
@@ -385,7 +385,7 @@ async function dlJournal() {
   }
 }
 function copyJournal() {
-  const rows = journalData(); const txt = ['Reference\tDate\tDescription\tLedger Account\tDetails\tDebit\tCredit'].concat(rows.map(r => [r.ref, r.first ? E.dmy(r.date) : '', r.first ? r.desc : '', r.acct, r.details, r.dr, r.cr].join('\t'))).join('\n');
+  const rows = journalData(); const txt = ['Date\tDebit/Credit\tAccount\tReference\tDescription\tVAT Type\tExclusive\tVAT\tTotal\tAffecting Account'].concat(rows.map(r => [E.dmy(r.date), r.dc, r.acct, r.ref, r.desc, r.vatType, r.excl, r.vat, r.total, r.aff].join('\t'))).join('\n');
   const ta = $('#jcopy'), msg = $('#jmsg');
   (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => { msg.textContent = 'Copied.'; }).catch(() => { ta.classList.remove('hidden'); ta.value = txt; ta.select(); msg.textContent = 'Copy blocked here — select the text below and copy it.'; });
 }

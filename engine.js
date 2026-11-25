@@ -182,25 +182,22 @@ const Engine = (() => {
   }
 
   // ---------- Sage journal CSV (Sage Accounting journal-import layout) ----------
-  function journalRows(months, settings) { // months: [{month,date,ref,items:[{label,amount,desc,loanAcct}]}]
+  // Sage "Journal Entries" import layout: one row per journal line.
+  // Account = the account debited/credited; Affecting Account = the opposite side.
+  function journalRows(months, settings) { // months: [{ref,date,desc,items:[{amount,desc,loanAcct}]}]
     const rows = [];
-    months.forEach(j => {
-      let first = true;
-      j.items.forEach(it => {
-        const a = Math.abs(it.amount).toFixed(2); const pos = it.amount >= 0;
-        // Dr interest expense, Cr loan account (reverse when negative)
-        rows.push({ ref: j.ref, date: j.date, desc: first ? j.desc : '', acct: settings.expenseAccount || '', details: it.desc, dr: pos ? a : '', cr: pos ? '' : a, first });
-        rows.push({ ref: j.ref, date: j.date, desc: '', acct: it.loanAcct || '', details: it.desc, dr: pos ? '' : a, cr: pos ? a : '', first: false });
-        first = false;
-      });
-    });
+    months.forEach(j => j.items.forEach(it => {
+      const a = Math.abs(it.amount).toFixed(2); const pos = it.amount >= 0;
+      // positive: Dr interest expense / Cr loan account; negative (adjustment): reverse
+      rows.push({ date: j.date, dc: pos ? 'Debit' : 'Credit', acct: settings.expenseAccount || '', ref: j.ref, desc: it.desc, vatType: 'No VAT', excl: a, vat: '0.00', total: a, aff: it.loanAcct || '' });
+    }));
     return rows;
   }
   const csvEsc = v => { v = String(v == null ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
   function journalCsv(rows) {
-    const head = ['Reference', 'Date', 'Description', 'Ledger Account', 'Details', 'Analysis Type 1', 'Analysis Type 2', 'Analysis Type 3', 'Include on Tax Return', 'Debit', 'Credit', 'Exchange rate'];
+    const head = ['Date', 'Debit/Credit', 'Account', 'Reference', 'Description', 'VAT Type', 'Exclusive', 'VAT', 'Total', 'Affecting Account', 'Comment', 'Analysis Code 1', 'Analysis Code 2', 'Analysis Code 3'];
     const lines = [head.join(',')];
-    rows.forEach(r => lines.push([r.ref, r.first ? dmy(r.date) : '', r.first ? r.desc : '', r.acct, r.details, '', '', '', '', r.dr, r.cr, ''].map(csvEsc).join(',')));
+    rows.forEach(r => lines.push([dmy(r.date), r.dc, r.acct, r.ref, r.desc, r.vatType, r.excl, r.vat, r.total, r.aff, '', '', '', ''].map(csvEsc).join(',')));
     return lines.join('\r\n') + '\r\n';
   }
   const journalRef = (prefix, month) => { const [y, m] = month.split('-'); return (prefix || 'INTJNL') + MON[+m - 1] + y; };
