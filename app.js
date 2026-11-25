@@ -22,6 +22,9 @@ const api = {
   prime: () => ok(sb.from('prime_rates').select('effective_from,rate').order('effective_from')),
   accounts: id => ok(sb.from('loan_accounts').select('*, loan_rate_rules(effective_from,basis,value)').eq('client_id', id).order('label')),
   runs: id => ok(sb.from('interest_runs').select('reference,journal_date,total,created_at').eq('client_id', id).order('created_at', { ascending: false }).limit(10)),
+  entries: async accId => { const out = []; for (let from = 0; ; from += 1000) { const r = await ok(sb.from('ledger_entries').select('seq,entry_date,entity,ref,entry_type,description,debit,credit,balance').eq('loan_account_id', accId).order('entry_date').order('seq').range(from, from + 999)); out.push(...r); if (r.length < 1000) break; } return out; },
+  lastImports: id => ok(sb.from('ledger_imports').select('loan_account_id,file_name,imported_at,row_count').eq('client_id', id).order('imported_at', { ascending: false }).limit(200)),
+  importLedger: p => ok(sb.rpc('replace_ledger', p)),
   logRun: row => ok(sb.from('interest_runs').insert(row)),
   saveSettings: (id, payload) => ok(sb.rpc('save_client_settings', { p_client: id, p: payload })),
   savePrime: rows => ok(sb.rpc('save_prime', { p: rows })),
@@ -70,9 +73,20 @@ async function selectClient(id) {
   try { localStorage.setItem('dli.client', id); } catch (e) { }
   const [prime, accts, rn] = await Promise.all([api.prime(), api.accounts(id), api.runs(id)]);
   settings = { prime: prime.map(p => ({ from: p.effective_from, rate: +p.rate })), accounts: {}, expenseAccount: client.expense_account || '', refPrefix: client.ref_prefix || 'INTJNL', fyeMonth: client.fye_month || 2 };
-  accts.forEach(a => { settings.accounts[a.sage_key] = { sageName: a.sage_account_name, label: a.label, descPrefix: a.desc_prefix, loanAccount: a.sage_ledger_account, rates: (a.loan_rate_rules || []).map(r => ({ from: r.effective_from, basis: r.basis, value: +r.value })).sort((x, y) => x.from < y.from ? -1 : 1) }; });
+  accts.forEach(a => { settings.accounts[a.sage_key] = { dbId: a.id, opening: +a.opening_balance || 0, openingDate: a.opening_date, sageName: a.sage_account_name, label: a.label, descPrefix: a.desc_prefix, loanAccount: a.sage_ledger_account, rates: (a.loan_rate_rules || []).map(r => ({ from: r.effective_from, basis: r.basis, value: +r.value })).sort((x, y) => x.from < y.from ? -1 : 1) }; });
   runs = rn; primeDirty = false;
+  const imps = await api.lastImports(id); const lastImp = {}; imps.forEach(i => { if (!lastImp[i.loan_account_id]) lastImp[i.loan_account_id] = i; });
+  for (const a of accts) { const k = a.sage_key; const ent = await api.entries(a.id); if (ent.length) loaded.push(makeLoaded(k, ent, lastImp[a.id])); }
+  loaded.sort((x, y) => x.acct.name.localeCompare(y.acct.name));
   if (isClientAdmin()) { try { members = await api.listMembers(id); } catch (e) { members = []; } }
+}
+
+function makeLoaded(key, ent, imp) {
+  const c = settings.accounts[key];
+  const acct = { name: c.sageName || key, company: client ? client.name : '', opening: c.opening || 0, openingDate: c.openingDate,
+    rows: ent.map(e => ({ date: e.entry_date, entity: e.entity || '', ref: e.ref || '', type: e.entry_type || '', desc: e.description || '', debit: +e.debit, credit: +e.credit, bal: e.balance == null ? 0 : +e.balance, hasBal: e.balance != null })) };
+  E.prepareAccount(acct);
+  return { id: key, file: imp ? imp.file_name : '', imported: imp ? imp.imported_at : '', acct, cfgKey: key, accrued: null, adj: {} };
 }
 
 // ======================= saving (debounced, serial) =======================
@@ -89,29 +103,40 @@ async function flush() {
   } catch (e) { saveState = 'Could not save: ' + e.message; }
   saving = false; if (dirty) flush(); paintSave();
 }
+async function settle() { clearTimeout(saveTimer); for (let i = 0; i < 200 && (dirty || saving); i++) { if (dirty && !saving) await flush(); else await new Promise(r => setTimeout(r, 50)); } if (/^Could not/.test(saveState)) throw new Error(saveState); }
 function paintSave() { const el = $('#savestate'); if (el) el.textContent = saveState; }
 
 // ======================= ledger loading =======================
 async function loadFiles(files) {
   notes = [];
+  if (!canEdit()) { notes.push('You have view-only access, so you cannot import ledgers.'); render(); return; }
+  busy = 'Importing…'; render();
   for (const f of files) {
     let text; try { text = await f.text(); } catch (e) { notes.push(`Could not read ${f.name}`); continue; }
     let accts = [];
     try { accts = /^\s*</.test(text) || /<table/i.test(text) ? E.parseSageHtml(text) : E.parseCsv(text, f.name.replace(/\.[^.]+$/, '')); } catch (e) { }
     accts = accts.filter(a => a.rows.length);
     if (!accts.length) { notes.push(`${f.name}: no ledger transactions found — expected the Sage "Account Transactions Report" export.`); continue; }
-    accts.forEach(a => {
-      E.prepareAccount(a);
+    for (const a of accts) {
       const key = E.keyOf(a.name);
-      if (!settings.accounts[key]) { settings.accounts[key] = { sageName: a.name, label: a.name, descPrefix: 'Interest Loan - ' + a.name, loanAccount: '', rates: [] }; queueSave(); }
-      const id = (a.company || '') + '|' + key;
-      loaded = loaded.filter(l => l.id !== id);
-      loaded.push({ id, file: f.name, acct: a, cfgKey: key, accrued: null, adj: {} });
-    });
+      try {
+        if (!settings.accounts[key]) { settings.accounts[key] = { sageName: a.name, label: a.name, descPrefix: 'Interest Loan - ' + a.name, loanAccount: '', rates: [] }; queueSave(); }
+        await settle();
+        const first = a.rows[0].date, last = a.rows[a.rows.length - 1].date;
+        const from = a.openingDate && a.openingDate < first ? a.openingDate : first, to = a.rangeTo && a.rangeTo > last ? a.rangeTo : last;
+        const res = await api.importLedger({ p_client: clientId, p_sage_key: key, p_file: f.name, p_from: from, p_to: to, p_opening: a.opening || 0, p_opening_date: a.openingDate || from,
+          p_rows: a.rows.map((r, n) => ({ seq: n, date: r.date, entity: r.entity, ref: r.ref, type: r.type, desc: r.desc, debit: r.debit, credit: r.credit, bal: r.hasBal ? r.bal : null })) });
+        const accs = await api.accounts(clientId); const row = accs.find(x => x.sage_key === key);
+        Object.assign(settings.accounts[key], { dbId: row.id, opening: +row.opening_balance || 0, openingDate: row.opening_date });
+        const ent = await api.entries(row.id);
+        loaded = loaded.filter(l => l.cfgKey !== key); loaded.push(makeLoaded(key, ent, { file_name: f.name, imported_at: new Date().toISOString() }));
+        notes.push(`Saved ${a.name}: ${res.inserted} entries (${res.replaced ? res.replaced + ' previous entries in that period replaced' : 'first import'}).`);
+      } catch (e) { notes.push(`${a.name}: could not save — ${e.message}`); }
+    }
     const co = accts[0].company; if (co && client && co.toLowerCase().replace(/[^a-z0-9]/g, '') !== client.name.toLowerCase().replace(/[^a-z0-9]/g, '')) notes.push(`Note: ${f.name} is for "${co}" but the selected client is "${client.name}".`);
   }
   loaded.sort((a, b) => a.acct.name.localeCompare(b.acct.name));
-  render();
+  busy = ''; render();
 }
 
 // ======================= computation =======================
@@ -182,11 +207,11 @@ function rateEditor(cfgKey) {
 const rateAt = (cfg, day) => E.rateOn(day, cfg, settings.prime);
 
 function vRun(ctx) {
-  let h = `<div class="card"><div class="row"><div class="grow"><h2>${esc(client.name)} — load the latest Sage ledger</h2><div class="muted">Sage → Reports → Account Transactions Report for each director / related-party loan account (the .xls export). Select several files at once.</div></div>
+  let h = `<div class="card"><div class="row"><div class="grow"><h2>${esc(client.name)} — load the latest Sage ledger</h2><div class="muted">Sage → Reports → Account Transactions Report for each director / related-party loan account (the .xls export). Select several files at once. Each import is saved in the app and replaces what was held for that period.</div></div>
   <div><span class="muted">Interest up to </span><select data-a="asat">${monthEnds.map(d => `<option value="${d}"${d === asAt ? ' selected' : ''}>${E.dmy(d)}</option>`).join('')}</select></div></div>
   <div class="drop" id="drop" data-a="pick" style="margin-top:12px"><b>Choose ledger files</b> or drop them here<input id="fin" type="file" multiple accept=".xls,.xlsx,.html,.htm,.csv" class="hidden"></div>
-  ${notes.map(n => `<div class="note bad">${esc(n)}</div>`).join('')}</div>`;
-  if (!loaded.length) return h + `<div class="note info">No ledgers loaded yet. Ledgers are read in your browser and are not stored.</div>`;
+  ${notes.map(n => `<div class="note ${/^Saved/.test(n) ? 'info' : 'bad'}">${esc(n)}</div>`).join('')}</div>`;
+  if (!loaded.length) return h + `<div class="note info">No ledgers saved for this client yet. Import the Sage exports above; they are then kept in the app.</div>`;
   ctx.plans.forEach(p => { h += vAccountCard(p); });
   return h;
 }
@@ -196,6 +221,7 @@ function vAccountCard(p) {
   let h = `<div class="card"><div class="row"><div class="grow"><h3>${esc(cfg.label || a.name)} <span class="muted">· ${esc(a.name)}${a.company ? ' · ' + esc(a.company) : ''}</span></h3></div>
   <span class="pill ${plan.months.length || plan.blocked ? 'todo' : 'ok'}">${plan.blocked ? 'Rate needed' : plan.months.length ? plan.months.length + ' month' + (plan.months.length > 1 ? 's' : '') + ' to post' : 'Up to date'}</span></div>`;
   h += `<div class="kv"><div><span>Last ledger entry</span><b>${lastTx ? E.dmy(lastTx) : '-'}</b></div>
+  <div><span>Last imported</span><b>${l.imported ? esc(String(l.imported).slice(0, 10)) + (l.file ? ' · ' + esc(l.file) : '') : '-'}</b></div>
   <div><span>Last interest posted</span><b>${lastInt ? `${E.dmy(lastInt.date)} · ${fmt(lastInt.net)}` : 'none found'}</b></div>
   <div><span>Interest accrued up to</span><b><input type="date" value="${esc(plan.accruedThrough || '')}" data-a="accrued" data-id="${esc(l.id)}"> ${l.accrued ? `<button class="lnk" data-a="accrued-reset" data-id="${esc(l.id)}">reset</button>` : ''}</b></div>
   <div><span>Ledger balance at ${E.dmy(asAt)}</span><b>${fmt(bal)}</b></div>
@@ -226,7 +252,7 @@ function vAccountCard(p) {
 function vJournal(ctx) {
   const js = ctx.journals;
   let h = `<div class="card"><h2>Interest journal — ${esc(client.name)}</h2>`;
-  if (!loaded.length) return h + `<div class="note info">Load the ledgers first.</div></div>` + vRuns();
+  if (!loaded.length) return h + `<div class="note info">Import the ledgers first.</div></div>` + vRuns();
   const d = canEdit() ? '' : ' disabled';
   h += `<div class="row"><div>Sage ledger account for interest expense (debit) <input class="w-m" data-a="expacct" value="${esc(settings.expenseAccount)}" placeholder="account number / name"${d}></div></div>`;
   const missing = ctx.plans.filter(p => !p.cfg.loanAccount && js.some(j => j.lines.some(x => x.p === p)));
