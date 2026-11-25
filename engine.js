@@ -172,7 +172,7 @@ const Engine = (() => {
   // ---------- statements ----------
   // lines: ledger rows + generated rows, sorted by date (stable), running balance recomputed.
   function buildStatement(acct, generated, from, to) {
-    const all = acct.rows.map(r => ({ date: r.date, ref: r.ref, desc: r.desc, debit: r.debit, credit: r.credit, net: r.net, gen: false, ord: r.idx }))
+    const all = acct.rows.map(r => ({ date: r.date, ref: r.ref, desc: r.desc, debit: r.debit, credit: r.credit, net: r.net, gen: false, pend: r.inSage === false, ord: r.idx }))
       .concat((generated || []).map((g, i) => ({ date: g.date, ref: g.ref, desc: g.desc, debit: g.amount < 0 ? -g.amount : 0, credit: g.amount > 0 ? g.amount : 0, net: g.amount, gen: true, ord: 1e9 + i })));
     all.sort((a, b) => a.date < b.date ? -1 : a.date > b.date ? 1 : a.ord - b.ord);
     let bal = acct.opening, opening = acct.opening; const lines = [];
