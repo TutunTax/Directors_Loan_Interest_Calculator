@@ -139,6 +139,8 @@ function render() {
   if (!client) { $('#nav').innerHTML = ''; $('#app').innerHTML = `<div class="card"><h2>No clients yet</h2><div class="muted">${isPlatformAdmin ? 'Use “+ New client” at the top to add your first client.' : 'You have not been given access to any client. Ask the practice to add you.'}</div></div>`; return; }
   $('#nav').innerHTML = TABS.map(([k, t]) => `<button data-a="tab" data-k="${k}" class="${tab === k ? 'on' : ''}">${esc(t)}</button>`).join('');
   $('#app').innerHTML = tab === 'stmt' ? vStmt() : tab === 'int' ? vInt() : vSet();
+  const rs = document.documentElement.style, hh = $('#hdr').offsetHeight, nh = $('#nav').offsetHeight, sk = $('#stick');
+  rs.setProperty('--hh', hh + 'px'); rs.setProperty('--top', (hh + nh) + 'px'); rs.setProperty('--ch', (sk ? sk.offsetHeight + 16 : 0) + 'px');
   window.scrollTo(0, sc);
 }
 function paintHeader() {
@@ -167,13 +169,13 @@ function vStmt() {
   const prime = settings.prime;
   const st = Stmt.statement(l.all, l.acct, cfg, prime, from, asAt);
   const drafts = l.all.filter(r => !r.removed && !r.approved);
-  h += `<div class="card"><div class="row"><select data-a="acct">${loaded.map(x => `<option value="${esc(x.cfgKey)}"${x.cfgKey === l.cfgKey ? ' selected' : ''}>${esc(accLabel(x))}</option>`).join('')}</select>
+  h += `<div class="card stick" id="stick"><div class="row"><select data-a="acct">${loaded.map(x => `<option value="${esc(x.cfgKey)}"${x.cfgKey === l.cfgKey ? ' selected' : ''}>${esc(accLabel(x))}</option>`).join('')}</select>
   <span class="muted">From</span><input type="date" value="${from}" data-a="sfrom"><span class="muted">To</span><select data-a="asat">${monthEnds.map(d => `<option value="${d}"${d === asAt ? ' selected' : ''}>${E.dmy(d)}</option>`).join('')}</select>
   <span class="grow"></span>${canEdit() ? `<button class="btn sec" data-a="add-open">+ Add line</button>${drafts.length ? `<button class="btn" data-a="approve-all">Approve all drafts (${drafts.length})</button>` : ''}` : ''}<button class="btn sec" data-a="dl-pdf">Download PDF</button></div>
   <div class="muted" style="margin-top:6px">Last import: ${l.imported ? esc(String(l.imported).slice(0, 10)) + (l.file ? ' · ' + esc(l.file) : '') : 'none'} · Opening balance ${fmt(st.opening)}</div>`;
   if (l.acct.balanceMismatches) h += `<div class="note warn">The Balance column in Sage's export doesn't tie to its own debits and credits (${l.acct.balanceMismatches} row${l.acct.balanceMismatches > 1 ? 's' : ''}, first on ${E.dmy(l.acct.firstMismatch.date)}).</div>`;
   if (addOpen && canEdit()) h += vLineForm(null);
-  h += `<div style="overflow:auto;margin-top:8px"><table class="sm"><tr><th>Date</th><th>Reference</th><th>Description</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th><th class="n">Interest</th><th>Status</th><th></th></tr>`;
+  h += `</div><div class="card"><table class="sm stmt-tbl"><tr><th>Date</th><th>Reference</th><th>Description</th><th class="n">Debit</th><th class="n">Credit</th><th class="n">Balance</th><th class="n">Interest</th><th>Status</th><th></th></tr>`;
   st.months.forEach(m => {
     m.lines.forEach(x => {
       if (x.kind === 'bf') { h += `<tr class="bf"><td>${E.dmy(x.date)}</td><td></td><td><i>Balance brought forward</i></td><td></td><td></td><td class="n">${fmt(x.bal)}</td><td class="n">${x.item ? intCell(x.item) : ''}</td><td></td><td></td></tr>`; return; }
@@ -187,7 +189,7 @@ function vStmt() {
     });
     h += `<tr class="tot"><td colspan="6">${E.MONLONG[+m.month.slice(5) - 1]} ${m.month.slice(0, 4)} interest — calculated ${m.calc == null ? 'n/a (no rate)' : fmt(m.calc)} · posted ${fmt(m.posted)} · drafted ${fmt(m.drafted)}</td><td class="n">${m.calc == null ? '' : fmt(m.calc)}</td><td colspan="2" ${m.diff != null && Math.abs(m.diff) >= 0.005 ? 'style="color:var(--maroon);font-weight:600"' : ''}>${m.diff == null ? '' : Math.abs(m.diff) < 0.005 ? 'Reconciled' : 'Difference ' + fmt(m.diff)}</td></tr>`;
   });
-  h += `<tr class="tot"><td colspan="5">Closing balance (counted lines)</td><td class="n">${fmt(st.closing)}</td><td colspan="3"></td></tr></table></div></div>`;
+  h += `<tr class="tot"><td colspan="5">Closing balance (counted lines)</td><td class="n">${fmt(st.closing)}</td><td colspan="3"></td></tr></table></div>`;
   return h;
 }
 const intCell = it => `${it.interest ? fmt(it.interest) : ''}<div class="muted">${it.days} day${it.days === 1 ? '' : 's'}${it.rates.length ? ' @ ' + it.rates.map(E.pct).join('/') : ''}</div>`;
