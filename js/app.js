@@ -200,8 +200,9 @@ function rowButtons(r, status) {
   return b;
 }
 function vLineForm(r) {
-  const cr = r ? r.credit > 0 : true; const amt = r ? (r.credit > 0 ? r.credit : r.debit) : '';
-  return `<div class="note info"><div class="row"><span>Date</span><input type="date" class="en-date" value="${r ? r.date : todayIso}"><select class="en-type"><option value="credit"${cr ? ' selected' : ''}>Advance received (credit)</option><option value="debit"${cr ? '' : ' selected'}>Payment made (debit)</option></select><input type="number" step="0.01" min="0" class="en-amt" placeholder="Amount" value="${amt}"><input class="en-ref w-m" placeholder="Reference" value="${esc(r ? r.ref : '')}"><input class="en-desc w-l" placeholder="Description" value="${esc(r ? r.desc : '')}"><button class="btn" data-a="line-save" data-id="${r ? r.id : ''}">Save</button><button class="btn sec" data-a="line-cancel">Cancel</button></div>${r ? '' : '<div class="muted">New lines are saved as drafts until you approve them.</div>'}</div>`;
+  const cr = r ? r.credit > 0 : true; const amt = r ? (r.credit > 0 ? r.credit : r.debit) : ''; const it = !!(r && r.isInterest);
+  const cur = (it ? 'i' : '') + (cr ? 'credit' : 'debit'); const op = (v, t) => `<option value="${v}"${cur === v ? ' selected' : ''}>${t}</option>`;
+  return `<div class="note info"><div class="row"><span>Date</span><input type="date" class="en-date" value="${r ? r.date : todayIso}"><select class="en-type">${op('credit', 'Advance received (credit)')}${op('debit', 'Payment made (debit)')}${op('icredit', 'Interest charged (credit)')}${op('idebit', 'Interest reversed / corrected (debit)')}</select><input type="number" step="0.01" min="0" class="en-amt" placeholder="Amount" value="${amt}"><input class="en-ref w-m" placeholder="Reference" value="${esc(r ? r.ref : '')}"><input class="en-desc w-l" placeholder="Description" value="${esc(r ? r.desc : '')}"><button class="btn" data-a="line-save" data-id="${r ? r.id : ''}">Save</button><button class="btn sec" data-a="line-cancel">Cancel</button></div>${r ? '' : '<div class="muted">New lines are saved as drafts until you approve them.</div>'}</div>`;
 }
 
 // ---------- Sage import differences ----------
@@ -366,8 +367,10 @@ document.addEventListener('click', async e => {
     else if (a === 'line-save') {
       const n = t.closest('.note'); const amt = parseFloat(n.querySelector('.en-amt').value), dt = n.querySelector('.en-date').value;
       if (!(amt > 0) || !dt) { notes = ['Enter a date and an amount above zero.']; render(); return; }
-      const cr = n.querySelector('.en-type').value === 'credit'; const id = t.dataset.id ? +t.dataset.id : null;
-      await api.saveEntry({ p_client: clientId, p_id: id, p_sage_key: acctKey, p_date: dt, p_ref: n.querySelector('.en-ref').value.trim(), p_desc: n.querySelector('.en-desc').value.trim() || (cr ? 'Advance received' : 'Payment made'), p_debit: cr ? 0 : amt, p_credit: cr ? amt : 0, p_origin: 'manual' });
+      const tp = n.querySelector('.en-type').value; const cr = /credit$/.test(tp), isInt = tp[0] === 'i'; const id = t.dataset.id ? +t.dataset.id : null;
+      const ref = n.querySelector('.en-ref').value.trim(); let desc = n.querySelector('.en-desc').value.trim() || (isInt ? (cr ? 'Interest charged' : 'Interest correction') : (cr ? 'Advance received' : 'Payment made'));
+      if (isInt && !/\bint[er]{1,4}st\b/i.test(desc) && !/^i?int/i.test(ref)) desc = 'Interest - ' + desc;      // so the app recognises it as interest
+      await api.saveEntry({ p_client: clientId, p_id: id, p_sage_key: acctKey, p_date: dt, p_ref: ref, p_desc: desc, p_debit: cr ? 0 : amt, p_credit: cr ? amt : 0, p_origin: isInt ? 'interest' : 'manual' });
       addOpen = false; editId = null; notes = []; await afterChange();
     }
     else if (a === 'del') { const r = lineById(t.dataset.id); if (!r) return; if (!window.confirm(r.inSage ? 'Delete this line? It is in Sage, so it stays flagged until Sage no longer holds it.' : 'Delete this line?')) return; await api.deleteEntry(clientId, r.id); notes = []; await afterChange(); }
@@ -439,10 +442,11 @@ async function dlJournal() {
 }
 function dlPdf() {
   const l = curLoaded(); if (!l) return; const from = stmtFrom || fyStart(asAt), to = asAt;
-  const st = E.buildStatement(l.acct, [], from, to); const title = accLabel(l);
+  const title = accLabel(l);
   if (!window.jspdf) { notes = ['The PDF library did not load. Check your internet connection and reload.']; render(); return; }
+  const st = Stmt.statement(l.all, l.acct, settings.accounts[l.cfgKey], settings.prime, from, to);
   const doc = new window.jspdf.jsPDF({ unit: 'mm', format: 'a4' });
-  const M = 14, W = 210; const X = { date: M, ref: M + 21, desc: M + 52 }; const col = { deb: M + 130, cre: M + 154, bal: M + 182 };
+  const M = 14, W = 210; const X = { date: M, ref: M + 20, desc: M + 43 }; const col = { deb: M + 112, cre: M + 135, int: M + 157, bal: M + 182 };
   const maroon = [139, 26, 26], char = [52, 53, 50]; let y;
   const header = first => {
     doc.setFillColor(...maroon); doc.rect(0, 0, W, first ? 30 : 16, 'F'); doc.setTextColor(255); doc.setFont('helvetica', 'bold'); doc.setFontSize(first ? 15 : 10);
@@ -452,20 +456,27 @@ function dlPdf() {
     if (first) { doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.text(l.acct.name, M, y); y += 8; }
     doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setFillColor(240, 236, 231); doc.rect(M, y - 4.5, W - 2 * M, 6.5, 'F');
     doc.text('Date', X.date + 1, y); doc.text('Reference', X.ref, y); doc.text('Description', X.desc, y);
-    doc.text('Debit', col.deb, y, { align: 'right' }); doc.text('Credit', col.cre, y, { align: 'right' }); doc.text('Balance', col.bal, y, { align: 'right' }); y += 6;
+    doc.text('Debit', col.deb, y, { align: 'right' }); doc.text('Credit', col.cre, y, { align: 'right' }); doc.text('Interest', col.int, y, { align: 'right' }); doc.text('Balance', col.bal, y, { align: 'right' }); y += 6;
   };
   header(true);
-  const row = (d, ref, desc, de, cr, bal, bold) => {
+  const row = (d, ref, desc, de, cr, it, bal, bold) => {
     doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(8);
-    const dl = doc.splitTextToSize(desc || '', 56), rl = doc.splitTextToSize(ref || '', 29); const n = Math.max(dl.length, rl.length, 1); const h = n * 3.6 + 1.6;
+    const dl = doc.splitTextToSize(desc || '', 46), rl = doc.splitTextToSize(ref || '', 21); const n = Math.max(dl.length, rl.length, 1); const h = n * 3.6 + 1.6;
     if (y + h > 280) { doc.addPage(); header(false); doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(8); }
     doc.text(d, X.date + 1, y); doc.text(rl, X.ref, y); doc.text(dl, X.desc, y);
-    if (de) doc.text(de, col.deb, y, { align: 'right' }); if (cr) doc.text(cr, col.cre, y, { align: 'right' }); if (bal !== '') doc.text(bal, col.bal, y, { align: 'right' });
+    if (de) doc.text(de, col.deb, y, { align: 'right' }); if (cr) doc.text(cr, col.cre, y, { align: 'right' }); if (it) doc.text(it, col.int, y, { align: 'right' }); if (bal !== '') doc.text(bal, col.bal, y, { align: 'right' });
     y += h; doc.setDrawColor(230, 226, 220); doc.line(M, y - 3, W - M, y - 3);
   };
-  row('', '', 'Opening balance', '', '', fmt(st.opening), true);
-  st.lines.forEach(x => row(E.dmy(x.date), x.ref, x.desc, fmt(x.debit, true), fmt(x.credit, true), fmt(x.bal), false));
-  row('', '', 'Closing balance', fmt(st.totD), fmt(st.totC), fmt(st.closing), true);
+  const intTxt = x => x.item && Math.abs(x.item.interest) >= 0.005 ? fmt(x.item.interest) : '';
+  let totD = 0, totC = 0, totI = 0;
+  row('', '', 'Opening balance', '', '', '', fmt(st.opening), true);
+  st.months.forEach(m => m.lines.forEach(x => {
+    if (x.kind === 'bf') { if (x.item && Math.abs(x.item.interest) >= 0.005) { row(E.dmy(x.date), '', 'Balance brought forward', '', '', intTxt(x), fmt(x.bal), false); totI += x.item.interest; } return; }
+    const r = x.row; if (!Stmt.counted(r)) return;
+    totD += r.debit; totC += r.credit; if (x.item) totI += x.item.interest;
+    row(E.dmy(r.date), r.ref, r.desc, fmt(r.debit, true), fmt(r.credit, true), intTxt(x), fmt(x.bal), false);
+  }));
+  row('', '', 'Closing balance', fmt(E.round2(totD)), fmt(E.round2(totC)), fmt(E.round2(totI)), fmt(st.closing), true);
   const n = doc.getNumberOfPages();
   for (let i = 1; i <= n; i++) { doc.setPage(i); doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(120); doc.text('Prepared by Tutin Tax', M, 290); doc.text(`Page ${i} of ${n}`, W - M, 290, { align: 'right' }); }
   save(`Loan statement - ${title} - ${to}.pdf`, doc.output('blob'), 'application/pdf');
