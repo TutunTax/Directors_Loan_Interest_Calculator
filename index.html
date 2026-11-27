@@ -63,6 +63,11 @@ header select{background:#fff;color:var(--char);border:0;font-weight:600;max-wid
 header button{background:rgba(255,255,255,.15);color:#fff;border:1px solid rgba(255,255,255,.4);border-radius:5px;padding:4px 10px;font:inherit;cursor:pointer}
 header button:hover{background:rgba(255,255,255,.28)}
 input:disabled,select:disabled{background:#f3f1ee;color:#777}
+header{position:sticky;top:0;z-index:30}
+nav{position:sticky;top:var(--hh,0px);z-index:30}
+.stick{position:sticky;top:var(--top,0px);z-index:20;box-shadow:0 3px 8px rgba(0,0,0,.12);margin-bottom:0;border-bottom-left-radius:0;border-bottom-right-radius:0}
+.stmt-tbl th{position:sticky;top:calc(var(--top,0px) + var(--ch,0px) - 16px);background:#fff;z-index:10}
+.stick + .card{border-top:0;border-top-left-radius:0;border-top-right-radius:0}
 </style>
 </head>
 <body>
